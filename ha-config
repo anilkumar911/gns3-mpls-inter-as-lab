@@ -1,0 +1,197 @@
+============================================================
+DUAL-ASBR HIGH AVAILABILITY OPTIONS (INTER-AS OPTION B)
+============================================================
+
+
+------------------------------------------------------------
+OPTION 1 — ACTIVE / ACTIVE (ECMP LOAD SHARING)
+------------------------------------------------------------
+
+# On ASBR in AS100 (example AS 100)
+
+router bgp 100
+ bgp log-neighbor-changes
+ maximum-paths 4
+ address-family vpnv4
+  neighbor 10.255.255.2 activate
+  neighbor 10.255.255.6 activate
+ exit-address-family
+
+# Optional but recommended
+router bgp 100
+ neighbor 10.255.255.2 fall-over bfd
+ neighbor 10.255.255.6 fall-over bfd
+
+# Requirements:
+# - Equal local-pref
+# - Equal AS path
+# - Equal MED (or ignore MED)
+# - IGP metric equal to both next-hops
+
+# Result:
+# - Both ASBR2-A and ASBR2-B installed in LFIB
+# - Per-flow load balancing
+# - Fast failover if one path drops
+
+
+
+------------------------------------------------------------
+OPTION 2 — ACTIVE / STANDBY USING LOCAL-PREFERENCE
+------------------------------------------------------------
+
+# Define route-maps
+
+route-map PRIMARY permit 10
+ set local-preference 200
+
+route-map BACKUP permit 10
+ set local-preference 100
+
+# Apply inbound on ASBR in AS100
+
+router bgp 100
+ address-family vpnv4
+  neighbor 10.255.255.2 route-map PRIMARY in
+  neighbor 10.255.255.6 route-map BACKUP in
+ exit-address-family
+
+# Result:
+# - Only PRIMARY path installed
+# - BACKUP path kept in BGP table
+# - Failover occurs on BGP withdrawal
+
+
+
+------------------------------------------------------------
+OPTION 3 — ACTIVE / STANDBY USING AS-PATH PREPENDING
+------------------------------------------------------------
+
+# On backup ASBR in AS200
+
+route-map PREPEND permit 10
+ set as-path prepend 200 200 200
+
+router bgp 200
+ address-family vpnv4
+  neighbor 10.255.255.1 route-map PREPEND out
+ exit-address-family
+
+# Result:
+# - Remote AS prefers shorter AS path
+# - Backup used only if primary fails
+
+
+
+------------------------------------------------------------
+OPTION 4 — PRIMARY/BACKUP USING MED
+------------------------------------------------------------
+
+# On ASBRs in AS200
+
+route-map MED-PRIMARY permit 10
+ set metric 10
+
+route-map MED-BACKUP permit 10
+ set metric 200
+
+router bgp 200
+ address-family vpnv4
+  neighbor 10.255.255.1 route-map MED-PRIMARY out
+  neighbor 10.255.255.5 route-map MED-BACKUP out
+ exit-address-family
+
+# Result:
+# - Lower MED preferred
+# - Works best when both paths from same neighboring AS
+
+
+
+------------------------------------------------------------
+OPTION 5 — FAST FAILURE DETECTION WITH BFD
+------------------------------------------------------------
+
+bfd interval 50 min_rx 50 multiplier 3
+
+router bgp 100
+ neighbor 10.255.255.2 fall-over bfd
+ neighbor 10.255.255.6 fall-over bfd
+
+# Detection time ≈ 150ms
+
+
+
+------------------------------------------------------------
+OPTION 6 — IGP-BASED PRIMARY SELECTION
+------------------------------------------------------------
+
+# Adjust IGP metric toward one ASBR
+
+interface GigabitEthernet0/0
+ ip ospf cost 10   # preferred path
+
+interface GigabitEthernet0/1
+ ip ospf cost 100  # backup path
+
+# Result:
+# - BGP next-hop resolution prefers lower IGP metric
+# - Simple and clean method
+
+
+
+------------------------------------------------------------
+OPTION 7 — NEXT-HOP SELF (REQUIRED FOR STABILITY)
+------------------------------------------------------------
+
+router bgp 200
+ address-family vpnv4
+  neighbor 10.255.255.1 next-hop-self
+ exit-address-family
+
+# Prevents leaking internal PE loopbacks across AS boundary
+
+
+
+============================================================
+RECOMMENDED PRODUCTION MODEL
+============================================================
+
+For real deployments:
+
+✔ Use Active/Active with ECMP
+✔ Enable BFD
+✔ Keep equal attributes
+✔ Use route filtering
+✔ Use next-hop-self
+✔ Avoid single physical interconnect
+
+Active/Active gives:
+- Better link utilization
+- Faster convergence
+- Cleaner scaling
+
+Active/Standby gives:
+- Predictable traffic pattern
+- Controlled failover
+- Simpler troubleshooting
+
+
+                      AS100
+          --------------------------------
+             PE1 ----- P ----- PE-X
+                \               /
+                 \             /
+                  ASBR1-A   ASBR1-B
+                     |  \   /  |
+                     |   \ /   |
+                     |    X    |   <-- eBGP vpnv4 mesh (Option B)
+                     |   / \   |
+                     |  /   \  |
+                  ASBR2-A   ASBR2-B
+                /               \
+             PE2 ----- P ----- PE-Y
+          --------------------------------
+                    AS200
+
+============================================================
+END
+============================================================
